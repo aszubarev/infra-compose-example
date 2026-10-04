@@ -120,8 +120,10 @@ services:
     container_name: auth-demo-keycloak
     command: ["start", "--import-realm"]
     environment:
-      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER:-admin}
-      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      # Keycloak 24.0.5 creates the initial admin from these env vars
+      # (NOT KC_BOOTSTRAP_ADMIN_* — those came in a later release).
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN_USER:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
       KC_DB: dev-file
       # External hostname used in token `iss` and login URLs.
       KC_HOSTNAME: keycloak.auth.example.test
