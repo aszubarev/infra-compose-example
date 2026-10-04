@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OAuth2 / Keycloak Auth Demo</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #1e293b;
+      --panel-2: #273449;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --ok: #34d399;
+      --bad: #f87171;
+      --border: #334155;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 24px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+    }
+    header h1 { font-size: 18px; margin: 0; }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--ok);
+    }
+    .status .dot {
+      width: 9px; height: 9px; border-radius: 50%;
+      background: var(--ok);
+      box-shadow: 0 0 8px var(--ok);
+    }
+    main {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    @media (max-width: 720px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px;
+    }
+    .card h2 {
+      margin: 0 0 12px;
+      font-size: 15px;
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .card p { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
+    button {
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 14px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); }
+    button.logout {
+      background: transparent;
+      border-color: var(--bad);
+      color: var(--bad);
+    }
+    button.logout:hover { background: rgba(248,113,113,.12); }
+    pre {
+      background: #0b1220;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      overflow: auto;
+      max-height: 320px;
+      font-family: var(--mono);
+      font-size: 12px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: #cbd5e1;
+      margin: 12px 0 0;
+    }
+    .tag {
+      display: inline-block;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+    .tag.ok { background: rgba(52,211,153,.15); color: var(--ok); }
+    .tag.bad { background: rgba(248,113,113,.15); color: var(--bad); }
+    .kv { font-size: 13px; }
+    .kv div { display: flex; gap: 8px; padding: 3px 0; }
+    .kv .k { color: var(--muted); min-width: 160px; flex-shrink: 0; }
+    .kv .v { word-break: break-all; }
+    .hint { font-size: 12px; color: var(--muted); margin-top: 24px; }
+    code { font-family: var(--mono); color: var(--accent); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>OAuth2 / Keycloak Auth Demo</h1>
+    <div>
+      <span class="status"><span class="dot"></span>authenticated</span>
+      <button class="logout" onclick="logout()">Выйти (logout)</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="grid">
+      <div class="card">
+        <h2>Кто я? (whoami)</h2>
+        <p>Данные пользователя из access_token и из заголовков, которые пробросил oauth2-proxy.</p>
+        <button onclick="load('/api/whoami', 'whoami')">Запросить /api/whoami</button>
+        <pre id="whoami">—</pre>
+      </div>
+
+      <div class="card">
+        <h2>Токен (decode)</h2>
+        <p>Сырой access_token и его «расшифровка» (base64-decode header/payload без проверки подписи).</p>
+        <button onclick="load('/api/token', 'token')">Запросить /api/token</button>
+        <pre id="token">—</pre>
+      </div>
+
+      <div class="card">
+        <h2>Валидация подписи (verify)</h2>
+        <p>Проверка RS256-подписи публичным ключом Keycloak (JWKS), а также <code>iss</code> и <code>exp</code>.</p>
+        <button onclick="load('/api/verify', 'verify')">Запросить /api/verify</button>
+        <pre id="verify">—</pre>
+      </div>
+
+      <div class="card">
+        <h2>Публичные ключи (JWKS)</h2>
+        <p>Ключи Keycloak, которыми подписаны токены.</p>
+        <button onclick="load('/api/keys', 'keys')">Запросить /api/keys</button>
+        <pre id="keys">—</pre>
+      </div>
+    </div>
+
+    <p class="hint">
+      Все запросы к <code>/api/*</code> проходят через nginx <code>auth_request</code>.
+      Если кука сессии истекла — браузер будет перенаправлен на Keycloak для повторного входа.
+    </p>
+  </main>
+
+  <script>
+    // If this page is somehow shown without a valid session (e.g. served from
+    // a stale cache), immediately bounce to the login flow.
+    (async function guard() {
+      try {
+        const res = await fetch('/api/whoami', { credentials: 'same-origin', redirect: 'manual' });
+        if (res.type === 'opaqueredirect' || res.status === 401) {
+          window.location.href = '/oauth2/start?rd=' + encodeURIComponent(location.href);
+        }
+      } catch (e) {
+        /* network error — ignore */
+      }
+    })();
+
+    async function load(path, target) {
+      const el = document.getElementById(target);
+      el.textContent = 'Загрузка…';
+      try {
+        const res = await fetch(path, { credentials: 'same-origin' });
+        const data = await res.json();
+        el.textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        el.textContent = 'Ошибка: ' + err;
+      }
+    }
+
+    function logout() {
+      // oauth2-proxy clears its session cookie, performs a server-side Keycloak
+      // logout (--backend-logout-url with id_token_hint), then redirects back here.
+      window.location.href = '/oauth2/sign_out?rd=' + encodeURIComponent('https://auth.example.test/');
+    }
+  </script>
+</body>
+</html>

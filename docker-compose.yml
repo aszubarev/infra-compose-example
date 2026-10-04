@@ -1,0 +1,184 @@
+name: auth-demo
+
+services:
+  # ---------------------------------------------------------------------------
+  # nginx — single entry point for all network traffic (TLS terminated here).
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: auth-demo-nginx
+    ports:
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/html:/usr/share/nginx/html:ro
+      - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+      oauth2-proxy:
+        condition: service_started
+      keycloak:
+        condition: service_started
+    networks:
+      - demo
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # oauth2-proxy — validates cookies / sessions and performs the OIDC flow.
+  # Runs in `auth_request` mode: nginx only ever calls /oauth2/auth, /oauth2/start,
+  # /oauth2/callback and /oauth2/sign_out. The token exchange with Keycloak
+  # (authorization code -> access_token/refresh_token) happens service-to-service
+  # via http://keycloak:8080 (internal Docker network).
+  # ---------------------------------------------------------------------------
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.7.0
+    container_name: auth-demo-oauth2-proxy
+    command:
+      - --http-address=0.0.0.0:4180
+      # auth_request mode: respond 202 instead of proxying an upstream.
+      - --upstream=static://202
+      # Put user/email + access token into the 202 response so nginx can
+      # forward them to the backend. (--pass-access-token only emits
+      # X-Auth-Request-Access-Token when --set-xauthrequest is also set.)
+      - --set-xauthrequest=true
+      - --pass-access-token=true
+      # OIDC provider config.
+      - --provider=oidc
+      - --client-id=demo-client
+      # Must match the `secret` of the `demo-client` client in keycloak/realm-export.json.
+      - --client-secret=demo-client-secret-7b009d9f240afd30
+      - --cookie-secret=${OAUTH2_PROXY_COOKIE_SECRET:?Set OAUTH2_PROXY_COOKIE_SECRET in .env}
+      - --cookie-name=_oauth2_proxy
+      - --cookie-secure=true
+      - --cookie-samesite=lax
+      - --cookie-httponly=true
+      # Session lifecycle (coordinated with Keycloak token/session timeouts).
+      - --cookie-refresh=3m
+      - --cookie-expire=30m
+      # Redis-backed session store (shared, survives oauth2-proxy restarts).
+      - --session-store-type=redis
+      - --redis-connection-url=redis://redis:6379/0
+      - --redis-use-sentinel=false
+      # Explicit OIDC endpoints: discovery is disabled on purpose so that the
+      # token exchange can stay internal while the browser login page uses the
+      # external Keycloak hostname.
+      - --skip-oidc-discovery=true
+      - --oidc-issuer-url=https://keycloak.auth.example.test/realms/demo
+      - --login-url=https://keycloak.auth.example.test/realms/demo/protocol/openid-connect/auth
+      - --redeem-url=http://keycloak:8080/realms/demo/protocol/openid-connect/token
+      - --oidc-jwks-url=http://keycloak:8080/realms/demo/protocol/openid-connect/certs
+      - --profile-url=http://keycloak:8080/realms/demo/protocol/openid-connect/userinfo
+      - --validate-url=http://keycloak:8080/realms/demo/protocol/openid-connect/userinfo
+      - --redirect-url=https://auth.example.test/oauth2/callback
+      # Server-side SSO logout: oauth2-proxy ends the Keycloak session by
+      # calling the logout endpoint with the id_token_hint (internal URL,
+      # {id_token} is substituted by oauth2-proxy itself).
+      - --backend-logout-url=http://keycloak:8080/realms/demo/protocol/openid-connect/logout?id_token_hint={id_token}
+      - --email-domain=*
+      - --scope=openid email profile
+      - --whitelist-domain=auth.example.test,keycloak.auth.example.test
+      - --skip-provider-button=true
+      - --skip-auth-preflight=true
+      - --standard-logging=true
+      - --auth-logging=true
+      - --request-logging=true
+    depends_on:
+      redis:
+        condition: service_healthy
+    # No healthcheck: the official oauth2-proxy image is distroless and has no
+    # shell / wget / curl to run one. nginx depends on `service_started` instead.
+    networks:
+      - demo
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # redis — shared session store for oauth2-proxy.
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: auth-demo-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - demo
+    restart: unless-stopped
+    # Uncomment for direct debugging:
+    # ports:
+    #   - "127.0.0.1:6379:6379"
+
+  # ---------------------------------------------------------------------------
+  # keycloak — IdP. Starts with a pre-configured realm and clients (import).
+  # ---------------------------------------------------------------------------
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0.5
+    container_name: auth-demo-keycloak
+    command: ["start", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_DB: dev-file
+      # External hostname used in token `iss` and login URLs.
+      KC_HOSTNAME: keycloak.auth.example.test
+      # Accept the internal Host (keycloak:8080) used by oauth2-proxy/backend.
+      KC_HOSTNAME_STRICT: "false"
+      # Force https:// in the issuer and login URLs (browser reaches Keycloak
+      # through nginx over TLS). Do NOT set this to false, or `iss` becomes http://.
+      KC_HOSTNAME_STRICT_HTTPS: "true"
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY: edge
+    volumes:
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    healthcheck:
+      # Keycloak 24.0.5 listens on 8080 (no separate management port here).
+      # The port opens only after the realm import has finished.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080' 2>/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    networks:
+      - demo
+    restart: unless-stopped
+    # Uncomment for direct admin access without going through nginx:
+    # ports:
+    #   - "127.0.0.1:8080:8080"
+
+  # ---------------------------------------------------------------------------
+  # backend — resource server. Validates the forwarded access token with the
+  # public keys (JWKS) fetched from Keycloak over the internal network.
+  # ---------------------------------------------------------------------------
+  backend:
+    build: ./backend
+    image: auth-demo-backend:local
+    container_name: auth-demo-backend
+    environment:
+      KEYCLOAK_REALM: demo
+      KEYCLOAK_ISSUER: https://keycloak.auth.example.test/realms/demo
+      KEYCLOAK_JWKS_URL: http://keycloak:8080/realms/demo/protocol/openid-connect/certs
+      # Comma-separated allowed audiences; empty disables the `aud` check.
+      TOKEN_AUDIENCE: ""
+    depends_on:
+      keycloak:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - demo
+    restart: unless-stopped
+    # Uncomment for direct API debugging (bypasses auth):
+    # ports:
+    #   - "127.0.0.1:8000:8000"
+
+networks:
+  demo:
+    driver: bridge

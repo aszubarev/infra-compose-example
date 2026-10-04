@@ -1,0 +1,113 @@
+{
+  "id": "demo",
+  "realm": "demo",
+  "displayName": "Auth Demo Realm",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "verifyEmail": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": false,
+
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "clientSessionIdleTimeout": 1800,
+  "clientSessionMaxLifespan": 0,
+  "offlineSessionIdleTimeout": 2592000,
+  "offlineSessionMaxLifespanEnabled": false,
+  "refreshTokenMaxReuse": 0,
+  "accessCodeLifespan": 60,
+  "accessCodeLifespanUserAction": 300,
+  "accessCodeLifespanLogin": 1800,
+
+  "passwordPolicy": "length(8)",
+  "requiredCredentials": [
+    "password"
+  ],
+
+  "clients": [
+    {
+      "clientId": "demo-client",
+      "name": "OAuth2 Proxy",
+      "description": "Confidential OIDC client used by oauth2-proxy (authorization code flow).",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "fullScopeAllowed": true,
+      "redirectUris": [
+        "https://auth.example.test/oauth2/callback"
+      ],
+      "webOrigins": [
+        "https://auth.example.test"
+      ],
+      "secret": "demo-client-secret-7b009d9f240afd30",
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "roles",
+        "profile",
+        "email"
+      ],
+      "optionalClientScopes": [
+        "address",
+        "phone",
+        "offline_access",
+        "microprofile-jwt"
+      ],
+      "attributes": {
+        "post.logout.redirect.uris": "https://auth.example.test/*"
+      },
+      "protocolMappers": []
+    },
+    {
+      "clientId": "backend",
+      "name": "Backend (resource server)",
+      "description": "Logical audience for the backend API (bearer-only resource server).",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "fullScopeAllowed": true,
+      "redirectUris": [],
+      "webOrigins": [],
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "roles",
+        "profile",
+        "email"
+      ],
+      "optionalClientScopes": [],
+      "protocolMappers": []
+    }
+  ],
+
+  "users": [
+    {
+      "username": "demo",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "demo@example.test",
+      "firstName": "Demo",
+      "lastName": "User",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "demo12345",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}
