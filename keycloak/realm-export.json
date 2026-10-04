@@ -64,7 +64,22 @@
       "attributes": {
         "post.logout.redirect.uris": "https://auth.example.test/*"
       },
-      "protocolMappers": []
+      "protocolMappers": [
+        {
+          "name": "sub (subject)",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "id",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false",
+            "claim.name": "sub",
+            "jsonType.label": "String"
+          }
+        }
+      ]
     },
     {
       "clientId": "backend",

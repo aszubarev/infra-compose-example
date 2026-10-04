@@ -116,30 +116,33 @@ services:
   # keycloak — IdP. Starts with a pre-configured realm and clients (import).
   # ---------------------------------------------------------------------------
   keycloak:
-    image: quay.io/keycloak/keycloak:24.0.5
+    image: quay.io/keycloak/keycloak:26.0.8
     container_name: auth-demo-keycloak
     command: ["start", "--import-realm"]
     environment:
-      # Keycloak 24.0.5 creates the initial admin from these env vars
-      # (NOT KC_BOOTSTRAP_ADMIN_* — those came in a later release).
-      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN_USER:-admin}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      # Keycloak 25+ creates the initial admin from these env vars.
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
       KC_DB: dev-file
-      # External hostname used in token `iss` and login URLs.
-      KC_HOSTNAME: keycloak.auth.example.test
+      # Enable hostname:v2 so KC_HOSTNAME can be a full URL and the token `iss`
+      # stays stable (https://keycloak.auth.example.test) regardless of whether
+      # Keycloak is reached internally (http://keycloak:8080) or via nginx.
+      KC_FEATURES: hostname:v2
+      # Full external URL used in token `iss` and login URLs.
+      KC_HOSTNAME: https://keycloak.auth.example.test
       # Accept the internal Host (keycloak:8080) used by oauth2-proxy/backend.
       KC_HOSTNAME_STRICT: "false"
-      # Force https:// in the issuer and login URLs (browser reaches Keycloak
-      # through nginx over TLS). Do NOT set this to false, or `iss` becomes http://.
-      KC_HOSTNAME_STRICT_HTTPS: "true"
       KC_HTTP_ENABLED: "true"
-      KC_PROXY: edge
+      # Expose /health/ready on the management interface (port 9000).
+      KC_HEALTH_ENABLED: "true"
+      # Keycloak 25+ replaced --proxy=edge with --proxy-headers. nginx sends
+      # X-Forwarded-* headers, so use "xforwarded".
+      KC_PROXY_HEADERS: xforwarded
     volumes:
       - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
     healthcheck:
-      # Keycloak 24.0.5 listens on 8080 (no separate management port here).
-      # The port opens only after the realm import has finished.
-      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080' 2>/dev/null"]
+      # Keycloak 25+ exposes health on the management port 9000.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/9000' 2>/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 30
