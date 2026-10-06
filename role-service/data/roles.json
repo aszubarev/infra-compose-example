@@ -1,0 +1,4 @@
+{
+  "demo": ["reader", "editor"],
+  "alice": ["reader", "editor", "admin"]
+}

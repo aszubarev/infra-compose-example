@@ -155,3 +155,60 @@ Redirect/callback-эндпоинты (`/oauth2/start`, `/oauth2/callback`) — �
 
 - Конкретные значения TTL (5m/30m/10h), имена доменов `*.test`, учётки `demo/…` — это параметры стенда; в проде задаются политикой организации.
 - `hostname:v2`/`proxy-headers`/`KC_BOOTSTRAP_ADMIN_*` — детали конкретной версии Keycloak (см. отдельные заметки), не меняют модель безопасности.
+
+---
+
+## 7. Внешний сервис ролей (externalized authorization)
+
+Стенд реализует схему, в которой **Keycloak не хранит и не управляет ролями**: роли живут в отдельном сервисе `role-service`, а Keycloak на каждой выдаче access-токена запрашивает их и зашивает в токен.
+
+### Как это устроено
+
+```
+        ┌────────────┐   GET /users/{username}/roles   ┌──────────────┐
+        │  keycloak   │ ──────────────────────────────► │ role-service  │
+        │ (custom      │        роли в ответе            │ (single source│
+        │  mapper)     │ ◄────────────────────────────── │  of truth)    │
+        └─────┬──────┘                                    └──────────────┘
+              │ кладёт claim "roles" в access_token
+              ▼
+        ┌────────────┐  читает claim "roles", проверяет авторизацию
+        │  backend    │ ──────────────────────────────► 403 / 200
+        └────────────┘
+```
+
+- `role-service/` — FastAPI-сервис, отдаёт `GET /users/{username}/roles` → `{"roles": [...]}`. Ключ — **username** (уникальный в realm). Роли хранятся в `data/roles.json` (маунтится в volume) и **перечитываются на каждый запрос** — правки на хосте применяются без рестарта.
+- `keycloak/mapper/` — кастомный **Java SPI protocol mapper** (`custom-role-mapper`), реализующий `OIDCAccessTokenMapper`. В `transformAccessToken` он по `username` делает HTTP-запрос в role-service и кладёт роли в claim `roles`.
+- Маппер собирается **внутри Docker** (multi-stage `keycloak/Dockerfile`: Maven → JAR → `kc.sh build`) и зашивается в образ Keycloak.
+- Backend читает `roles` из валидированного токена и принимает решение по авторизации (`/api/admin` требует роль `admin`).
+
+### Ключевой технический нюанс (неочевидный)
+
+В Keycloak маппер **вызывается только если** в его конфиге явно указано `access.token.claim = "true"`. Логика `OIDCAttributeMapperHelper.includeInAccessToken`:
+
+```java
+return "true".equals(mappingModel.getConfig().get("access.token.claim"));
+```
+
+Без этого ключа `"true".equals(null)` = `false` → маппер молча пропускается, роли в токен не попадают (никаких ошибок в логах). В realm-импорте конфиг маппера обязан содержать:
+`role-service-url`, `claim-name`, `access.token.claim=true`, `id.token.claim=false`, `userinfo.token.claim=false`.
+
+### Свойства безопасности этой схемы
+
+1. **Один источник правды.** Роли принадлежат role-service; Keycloak их не хранит (ролевая подсистема Keycloak не используется).
+2. **Fail-closed по авторизации.** Если role-service недоступен/вернул не-200/ответ не распарсился — маппер кладёт пустой список ролей. Логин не падает (fail-open для аутентификации), но role-based доступ отсутствует (fail-closed для авторизации).
+3. **Роли — снимок на момент выдачи.** Роли зашиты в JWT, поэтому отзыв/изменение ролей вступает в силу только при следующей выдаче токена (макс. через access-token TTL + refresh). Мгновенного отзыва нет.
+
+### Что нужно учесть в проде (сверх стенда)
+
+- **Доступность role-service теперь стоит на критическом пути выдачи токена.** Обязательно: таймаут вызова (в стенде 2–3 с), короткий TTL-кэш, метрики и circuit-breaker.
+- **Стык keycloak ↔ role-service — по mTLS** (в стенде plain HTTP внутри сети, как и остальные стыки). Это новый доверенный канал с чувствительными данными (роли).
+- **Идентификатор корреляции.** В стенде — `username`. Если username может переименовываться — в проде использовать неизменяемый атрибут (`employeeId`) как ключ.
+- **SPI-маппер — кастомный код Keycloak**, который нужно пересобирать/перепроверять при апгрейде Keycloak.
+
+### Проверка в стенде
+
+- `demo` (роли `reader`, `editor`) → `/api/admin` = **403**.
+- `alice` (роли `reader`, `editor`, `admin`) → `/api/admin` = **200**.
+- `GET /api/token` и `/api/whoami` показывают claim `roles`.
+

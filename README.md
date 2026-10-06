@@ -135,11 +135,18 @@
 │   ├── conf.d/default.conf      # server-блоки: app + keycloak, auth_request
 │   └── html/index.html          # демо-страница (визуализация)
 ├── keycloak/
-│   └── realm-export.json        # realm "demo", клиенты, тестовый пользователь
+│   ├── Dockerfile               # multi-stage: собирает mapper (Maven) + kc.sh build
+│   ├── mapper/                  # кастомный SPI protocol mapper (роли из role-service)
+│   └── realm-export.json        # realm "demo", клиенты, пользователи, маппер
+├── role-service/
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   ├── app.py                   # FastAPI: GET /users/{username}/roles (источник ролей)
+│   └── data/roles.json          # роли (маунтится в volume, читается на каждый запрос)
 ├── backend/
 │   ├── Dockerfile
 │   ├── requirements.txt
-│   └── app.py                   # FastAPI: /api/token, /api/verify, /api/whoami, /api/keys
+│   └── app.py                   # FastAPI: /api/token, /api/verify, /api/whoami, /api/keys, /api/admin
 └── certs/                       # (генерируется) fullchain.pem + privkey.pem
 ```
 
@@ -198,14 +205,17 @@ docker compose down -v         # + удалить тома (сессии redis, 
 
 | Что | Значение |
 |-----|----------|
-| Тестовый пользователь | `demo` |
+| Тестовый пользователь | `demo` (роли `reader`, `editor`) |
 | Пароль пользователя | `demo12345` |
+| Пользователь-админ | `alice` (роли `reader`, `editor`, `admin`) |
+| Пароль админа | `alice12345` |
 | Keycloak admin console | https://keycloak.auth.example.test/admin |
 | Keycloak admin user | `admin` |
 | Keycloak admin password | `admin` (см. `.env`) |
 | Realm | `demo` |
 | Клиент oauth2-proxy | `demo-client` (confidential) |
 | Логический клиент-аудитория backend | `backend` (bearer-only) |
+| Сервис ролей | `role-service` (единый источник ролей) |
 
 ---
 
@@ -221,6 +231,24 @@ nginx и потому требуют аутентификации):
 - **`GET /api/verify`** — валидация подписи публичным ключом Keycloak (JWKS),
   проверка `iss` и `exp`; показывает, каким `kid` подписан токен.
 - **`GET /api/keys`** — список публичных ключей (JWKS), которыми подписаны токены.
+- **`GET /api/admin`** — пример role-based авторизации: требует роль `admin`
+  (`demo` → 403, `alice` → 200). Роль читается из claim `roles` в access-токене.
+
+Роли берутся **не из Keycloak**, а из внешнего сервиса `role-service`: кастомный
+Keycloak protocol mapper на каждой выдаче access-токена запрашивает
+`GET /users/{username}/roles` и зашивает роли в claim `roles`. Подробнее — в
+`SECURITY.md`, раздел 7.
+
+Роли хранятся в файле **`role-service/data/roles.json`** (маунтится в volume).
+Сервис перечитывает его на каждый запрос, поэтому правки на хосте подхватываются
+**без рестарта** — достаточно отредактировать JSON:
+
+```json
+{
+  "demo":  ["reader", "editor"],
+  "alice": ["reader", "editor", "admin"]
+}
+```
 
 Проверка «в лоб» (в браузере, после логина):
 
@@ -229,6 +257,7 @@ https://auth.example.test/api/token
 https://auth.example.test/api/verify
 https://auth.example.test/api/whoami
 https://auth.example.test/api/keys
+https://auth.example.test/api/admin
 ```
 
 Проверка, что аутентификация действительно требуется (открыть в инкогнито или после

@@ -78,6 +78,19 @@
             "claim.name": "sub",
             "jsonType.label": "String"
           }
+        },
+        {
+          "name": "roles from service",
+          "protocol": "openid-connect",
+          "protocolMapper": "custom-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "role-service-url": "http://role-service:8080",
+            "claim-name": "roles",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
         }
       ]
     },
@@ -120,6 +133,21 @@
         {
           "type": "password",
           "value": "demo12345",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "alice",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "alice@example.test",
+      "firstName": "Alice",
+      "lastName": "Admin",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "alice12345",
           "temporary": false
         }
       ]

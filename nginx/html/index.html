@@ -161,6 +161,13 @@
         <button onclick="load('/api/keys', 'keys')">Запросить /api/keys</button>
         <pre id="keys">—</pre>
       </div>
+
+      <div class="card">
+        <h2>Проверка роли (admin)</h2>
+        <p>Роль читается из claim <code>roles</code> в access_token.<br/><code>demo</code> → 403, <code>alice</code> → 200.</p>
+        <button onclick="checkAdmin()">Запросить /api/admin</button>
+        <pre id="admin">—</pre>
+      </div>
     </div>
 
     <p class="hint">
@@ -190,6 +197,18 @@
         const res = await fetch(path, { credentials: 'same-origin' });
         const data = await res.json();
         el.textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        el.textContent = 'Ошибка: ' + err;
+      }
+    }
+
+    async function checkAdmin() {
+      const el = document.getElementById('admin');
+      el.textContent = 'Загрузка…';
+      try {
+        const res = await fetch('/api/admin', { credentials: 'same-origin' });
+        const body = await res.json();
+        el.textContent = 'HTTP ' + res.status + '\n' + JSON.stringify(body, null, 2);
       } catch (err) {
         el.textContent = 'Ошибка: ' + err;
       }

@@ -55,7 +55,7 @@ services:
       - --cookie-samesite=lax
       - --cookie-httponly=true
       # Session lifecycle (coordinated with Keycloak token/session timeouts).
-      - --cookie-refresh=3m
+      - --cookie-refresh=15s
       - --cookie-expire=30m
       # Redis-backed session store (shared, survives oauth2-proxy restarts).
       - --session-store-type=redis
@@ -113,10 +113,38 @@ services:
     #   - "127.0.0.1:6379:6379"
 
   # ---------------------------------------------------------------------------
+  # role-service — the single source of truth for user roles. Keycloak does NOT
+  # store roles; on each token issuance the custom Keycloak mapper calls this
+  # service to fetch the user's roles and injects them into the token.
+  # ---------------------------------------------------------------------------
+  role-service:
+    build: ./role-service
+    image: auth-demo-role-service:local
+    container_name: auth-demo-role-service
+    volumes:
+      # Roles live in this file (mounted as a directory so host edits are
+      # picked up reliably); the service re-reads it on every request, so
+      # editing it on the host takes effect immediately (no restart).
+      - ./role-service/data:/app/data:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - demo
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
   # keycloak — IdP. Starts with a pre-configured realm and clients (import).
+  # Built from ./keycloak/Dockerfile, which compiles the custom role mapper
+  # (Java SPI) inside Docker and bakes it into the image via `kc.sh build`.
   # ---------------------------------------------------------------------------
   keycloak:
-    image: quay.io/keycloak/keycloak:26.0.8
+    build:
+      context: ./keycloak
+    image: auth-demo-keycloak:local
     container_name: auth-demo-keycloak
     command: ["start", "--import-realm"]
     environment:
@@ -140,6 +168,9 @@ services:
       KC_PROXY_HEADERS: xforwarded
     volumes:
       - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    depends_on:
+      role-service:
+        condition: service_healthy
     healthcheck:
       # Keycloak 25+ exposes health on the management port 9000.
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/9000' 2>/dev/null"]

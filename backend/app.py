@@ -17,6 +17,7 @@ import os
 
 import jwt
 from fastapi import FastAPI, Header
+from fastapi.responses import JSONResponse
 from jwt import PyJWKClient
 
 REALM = os.getenv("KEYCLOAK_REALM", "demo")
@@ -53,6 +54,35 @@ def _decode_unverified(token: str):
     return header, payload
 
 
+def _validate_token(raw: str):
+    """Validate an access token (signature + iss + exp).
+
+    Returns (valid, claims, key_info, error).
+    """
+    if not raw:
+        return False, None, None, "No token provided"
+    try:
+        signing_key = _jwks_client.get_signing_key_from_jwt(raw)
+        header = jwt.get_unverified_header(raw)
+        audience = [a for a in AUDIENCE.split(",") if a] or None
+        options = {"verify_aud": audience is not None}
+        claims = jwt.decode(
+            raw,
+            signing_key.key,
+            algorithms=ALGORITHMS,
+            issuer=ISSUER,
+            audience=audience,
+            options=options,
+        )
+        key_info = {
+            "kid": getattr(signing_key, "key_id", None),
+            "algorithm": header.get("alg"),
+        }
+        return True, claims, key_info, None
+    except Exception as exc:  # noqa: BLE001 - report every failure to the caller
+        return False, None, None, f"{type(exc).__name__}: {exc}"
+
+
 @app.get("/api/health")
 def health():
     return {"status": "ok", "service": "backend"}
@@ -75,35 +105,26 @@ def show_token(authorization: str | None = Header(default=None)):
 @app.get("/api/verify")
 def verify_token(authorization: str | None = Header(default=None)):
     raw = _bearer_token(authorization)
-    if not raw:
-        return {"valid": False, "error": "No token provided"}
+    valid, claims, key_info, error = _validate_token(raw)
+    if not valid:
+        return {"valid": False, "error": error}
+    return {"valid": True, "key": key_info, "claims": claims}
 
-    try:
-        signing_key = _jwks_client.get_signing_key_from_jwt(raw)
-        header = jwt.get_unverified_header(raw)
-        audience = [a for a in AUDIENCE.split(",") if a] or None
-        options = {"verify_aud": audience is not None}
-        claims = jwt.decode(
-            raw,
-            signing_key.key,
-            algorithms=ALGORITHMS,
-            issuer=ISSUER,
-            audience=audience,
-            options=options,
+
+@app.get("/api/admin")
+def admin_only(authorization: str | None = Header(default=None)):
+    """Example of role-based authorization: requires the `admin` role."""
+    raw = _bearer_token(authorization)
+    valid, claims, _, error = _validate_token(raw)
+    if not valid:
+        return JSONResponse(status_code=401, content={"error": error or "Invalid token"})
+    roles = claims.get("roles") or []
+    if "admin" not in roles:
+        return JSONResponse(
+            status_code=403,
+            content={"error": "Requires role 'admin'", "roles": roles},
         )
-        return {
-            "valid": True,
-            "key": {
-                "kid": getattr(signing_key, "key_id", None),
-                "algorithm": header.get("alg"),
-            },
-            "claims": claims,
-        }
-    except Exception as exc:  # noqa: BLE001 - report every failure to the caller
-        return {
-            "valid": False,
-            "error": f"{type(exc).__name__}: {exc}",
-        }
+    return {"status": "ok", "message": "admin access granted", "roles": roles}
 
 
 @app.get("/api/whoami")
@@ -129,6 +150,7 @@ def whoami(
             "azp": claims.get("azp"),
             "iss": claims.get("iss"),
             "aud": claims.get("aud"),
+            "roles": claims.get("roles"),
             "exp": claims.get("exp"),
             "iat": claims.get("iat"),
             "auth_time": claims.get("auth_time"),
